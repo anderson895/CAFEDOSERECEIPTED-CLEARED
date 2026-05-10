@@ -1,0 +1,14 @@
+gawin mung functional dapat kapag bumili mababawasan ang stock from inventory
+Kahit 3 stock lang muna don per grams ung nababawas
+gamitan mo nalang ng bin file as possible dun lang yan nag fufunction
+wala pa bin file yan
+
+  ┌─────────────────┬───────────┬──────────┐
+  │      Role       │ ID (user) │ Password │
+  ├─────────────────┼───────────┼──────────┤
+  │ Admin (DAVI)    │ AD123     │ DAVI     │
+  ├─────────────────┼───────────┼──────────┤
+  │ Cashier (JUNEY) │ CS456     │ JUNEY    │
+  ├─────────────────┼───────────┼──────────┤
+  │ Cashier (BRLLY) │ CS789     │ BRLLY    │
+  └─────────────────┴───────────┴──────────┘

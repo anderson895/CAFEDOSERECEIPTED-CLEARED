@@ -517,70 +517,135 @@ private void clearStockFields() {
     editingRowIndex = -1;
    }
 
-// === Inventory deduction (3 stocks, grams) ===
-private List<StockItem> ensureSeededStocks() {
-    List<StockItem> stocks = loadStocks();
-    if (stocks == null || stocks.isEmpty()) {
-        stocks = new ArrayList<>();
-        stocks.add(new StockItem("Coffee Beans", 5000));
-        stocks.add(new StockItem("Milk", 5000));
-        stocks.add(new StockItem("Sugar", 3000));
-        saveStocks(stocks);
-    }
-    return stocks;
-}
-
+// === Inventory deduction wired to inventory.bin (Vector<Vector> jTable4) ===
 private int sizeFactor(String size, int small, int medium, int large) {
     if (size == null) return small;
     switch (size) {
-        case "Small": case "Tall": case "Mini":    return small;
+        case "Small": case "Tall": case "Mini":       return small;
         case "Medium": case "Grande": case "Classic": return medium;
-        case "Large": case "Venti": case "Deluxe":  return large;
+        case "Large": case "Venti": case "Deluxe":    return large;
         default: return small;
     }
 }
 
-// returns grams to deduct for [Coffee Beans, Milk, Sugar] per ONE serving
+// per ONE serving: [coffee bean grams, milk grams, tea bag pieces]
 private int[] recipeFor(String item, String size) {
-    int coffee = 0, milk = 0, sugar = 0;
+    int coffee = 0, milk = 0, teabag = 0;
     if (item == null) return new int[]{0,0,0};
     switch (item) {
         case "Coffee": case "Mocha":
             coffee = sizeFactor(size, 8, 12, 18);
             milk   = sizeFactor(size, 50, 100, 150);
-            sugar  = sizeFactor(size, 5, 8, 10);
             break;
-        case "Tea": case "Matcha": case "Sakura":
-            milk  = sizeFactor(size, 40, 80, 120);
-            sugar = sizeFactor(size, 5, 8, 10);
+        case "Tea":
+            teabag = 1;
+            milk   = sizeFactor(size, 30, 60, 90);
+            break;
+        case "Matcha": case "Sakura":
+            teabag = 1;
+            milk   = sizeFactor(size, 40, 80, 120);
             break;
         case "Dark Choco": case "White Choco": case "Vanilla":
         case "Caramel M.": case "Taro": case "Hazel": case "Pistacio":
-            milk  = sizeFactor(size, 60, 110, 160);
-            sugar = sizeFactor(size, 6, 10, 14);
+            milk   = sizeFactor(size, 60, 110, 160);
             break;
-        case "Bread": case "Pancake": case "Cookie":
-            milk  = sizeFactor(size, 20, 30, 40);
-            sugar = sizeFactor(size, 10, 15, 20);
-            break;
-        default: break;
+        default: break; // food items don't touch these 3 stocks
     }
-    return new int[]{coffee, milk, sugar};
+    return new int[]{coffee, milk, teabag};
 }
 
-private void deductIngredient(List<StockItem> stocks, String name, int grams) {
-    if (grams <= 0) return;
-    for (StockItem s : stocks) {
-        if (s.getName().equalsIgnoreCase(name)) {
-            s.setStock(Math.max(0, s.getStock() - grams));
+// parse leading integer from "400", "5 PIECES", "50g" — keeps the suffix for re-format
+private int[] parseStockNumber(String raw) {
+    if (raw == null) return new int[]{0, -1};
+    String s = raw.trim();
+    int end = 0;
+    while (end < s.length() && Character.isDigit(s.charAt(end))) end++;
+    if (end == 0) return new int[]{0, 0};
+    try { return new int[]{Integer.parseInt(s.substring(0, end)), end}; }
+    catch (Exception e) { return new int[]{0, 0}; }
+}
+
+private String formatStock(String original, int newValue) {
+    int[] parsed = parseStockNumber(original);
+    String suffix = (original != null && parsed[1] > 0 && parsed[1] < original.trim().length())
+                  ? original.trim().substring(parsed[1]) : "";
+    return newValue + suffix;
+}
+
+private void deductFromTable(DefaultTableModel model, String name, int amount) {
+    if (amount <= 0) return;
+    for (int i = 0; i < model.getRowCount(); i++) {
+        Object rowName = model.getValueAt(i, 0);
+        if (rowName == null) continue;
+        if (rowName.toString().trim().equalsIgnoreCase(name)) {
+            String cur = String.valueOf(model.getValueAt(i, 1));
+            int curVal = parseStockNumber(cur)[0];
+            int newVal = Math.max(0, curVal - amount);
+            model.setValueAt(formatStock(cur, newVal), i, 1);
             return;
         }
     }
 }
 
+private int getStockAmount(DefaultTableModel model, String name) {
+    for (int i = 0; i < model.getRowCount(); i++) {
+        Object rowName = model.getValueAt(i, 0);
+        if (rowName != null && rowName.toString().trim().equalsIgnoreCase(name)) {
+            return parseStockNumber(String.valueOf(model.getValueAt(i, 1)))[0];
+        }
+    }
+    return 0;
+}
+
+private void syncInventoryTableFromBin(DefaultTableModel model) {
+    if (model.getRowCount() > 0) return;
+    try (FileInputStream fis = new FileInputStream("inventory.bin");
+         ObjectInputStream ois = new ObjectInputStream(fis)) {
+        Vector<Vector> tableData = (Vector<Vector>) ois.readObject();
+        for (Vector row : tableData) {
+            model.addRow(new Object[]{row.get(0), row.get(1)});
+        }
+    } catch (Exception ignored) {}
+}
+
+// returns null if stocks are enough, otherwise a message listing what's missing
+public String checkStockAvailability() {
+    if (jTable1.getRowCount() == 0) return null;
+    DefaultTableModel model = (DefaultTableModel) jTable4.getModel();
+    syncInventoryTableFromBin(model);
+
+    int needBean = 0, needMilk = 0, needTea = 0;
+    for (int i = 0; i < jTable1.getRowCount(); i++) {
+        String item = jTable1.getValueAt(i, 0).toString();
+        int qty;
+        try { qty = Integer.parseInt(jTable1.getValueAt(i, 1).toString()); }
+        catch (Exception e) { qty = 1; }
+        String size = jTable1.getValueAt(i, 2).toString();
+        int[] g = recipeFor(item, size);
+        needBean += g[0] * qty;
+        needMilk += g[1] * qty;
+        needTea  += g[2] * qty;
+    }
+
+    int haveBean = getStockAmount(model, "COFFEE BEAN");
+    int haveMilk = getStockAmount(model, "MILK");
+    int haveTea  = getStockAmount(model, "TEA BAG");
+
+    StringBuilder msg = new StringBuilder();
+    if (needBean > haveBean)
+        msg.append(String.format("• COFFEE BEAN: need %dg, have %dg%n", needBean, haveBean));
+    if (needMilk > haveMilk)
+        msg.append(String.format("• MILK: need %dg, have %dg%n", needMilk, haveMilk));
+    if (needTea > haveTea)
+        msg.append(String.format("• TEA BAG: need %d, have %d%n", needTea, haveTea));
+    return msg.length() == 0 ? null : msg.toString();
+}
+
 private void deductStocksFromCart() {
     if (jTable1.getRowCount() == 0) return;
-    List<StockItem> stocks = ensureSeededStocks();
+
+    DefaultTableModel model = (DefaultTableModel) jTable4.getModel();
+    syncInventoryTableFromBin(model);
 
     StringBuilder report = new StringBuilder();
     for (int i = 0; i < jTable1.getRowCount(); i++) {
@@ -591,17 +656,23 @@ private void deductStocksFromCart() {
         String size = jTable1.getValueAt(i, 2).toString();
 
         int[] g = recipeFor(item, size);
-        deductIngredient(stocks, "Coffee Beans", g[0] * qty);
-        deductIngredient(stocks, "Milk",         g[1] * qty);
-        deductIngredient(stocks, "Sugar",        g[2] * qty);
+        deductFromTable(model, "COFFEE BEAN", g[0] * qty);
+        deductFromTable(model, "MILK",        g[1] * qty);
+        deductFromTable(model, "TEA BAG",     g[2] * qty);
 
-        report.append(String.format("%s (%s) x%d -> -%dg beans, -%dg milk, -%dg sugar%n",
+        report.append(String.format("%s (%s) x%d -> -%dg bean, -%dg milk, -%d teabag%n",
                 item, size, qty, g[0]*qty, g[1]*qty, g[2]*qty));
     }
 
-    saveStocks(stocks);
-    try { loadStockTable(); } catch (Exception ignored) {}
+    // Persist back to inventory.bin (same file the Inventory screen reads/writes)
+    try (FileOutputStream fos = new FileOutputStream("inventory.bin");
+         ObjectOutputStream oos = new ObjectOutputStream(fos)) {
+        oos.writeObject(model.getDataVector());
+    } catch (Exception ex) {
+        ex.printStackTrace();
+    }
     System.out.println("[INVENTORY DEDUCTED]\n" + report);
+    return;
 }
 
     /**
@@ -1932,7 +2003,15 @@ private void deductStocksFromCart() {
     }//GEN-LAST:event_jComboBox10ActionPerformed
 
     private void jButton30ActionPerformed(java.awt.event.ActionEvent evt) {//GEN-FIRST:event_jButton30ActionPerformed
-        // TODO add your handling code here:
+        // Validate stock BEFORE saving sale / accepting payment
+        String shortage = checkStockAvailability();
+        if (shortage != null) {
+            JOptionPane.showMessageDialog(null,
+                "❌ Not enough stock to complete this order:\n\n" + shortage
+                + "\nPlease restock or remove items from the cart.",
+                "Insufficient Stock", JOptionPane.WARNING_MESSAGE);
+            return;
+        }
         saveSaleToDatastore();
         if(total > 0) {
     if(jTextChange.getText().trim().isEmpty()) {
